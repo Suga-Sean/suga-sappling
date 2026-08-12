@@ -1,0 +1,24 @@
+{
+  "name": "ai-product-description-generator",
+  "version": "0.1.0",
+  "description": "Generate SEO-friendly e-commerce product descriptions with AI. The sellable core of a Shopify/WooCommerce app.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "ecommerce",
+    "dropshipping",
+    "shopify",
+    "product-descriptions",
+    "ai",
+    "claude"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0"
+  }
+}
