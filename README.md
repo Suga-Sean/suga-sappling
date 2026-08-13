@@ -44,11 +44,77 @@ Open http://localhost:3000
 **No API key?** It still runs — DEMO mode returns templated copy so you can see
 the interface. Add `ANTHROPIC_API_KEY` to `.env` for real output.
 
-## Cost
+## Cost per generation
 
-One generation = one API call producing all three versions. Default model is
-`claude-opus-5`. For high volume set `MODEL=claude-sonnet-5` in `.env` —
-cheaper, still excellent for this task.
+One click = one API call producing all three versions. That means roughly
+**2,000 output tokens per generation**, not a few hundred — so the unit cost is
+cents, not fractions of a cent:
+
+| Model | Cost per generation | 100 generations |
+|---|---|---|
+| `claude-opus-5` (dev default) | ~5¢ | ~$5.00 |
+| `claude-sonnet-5` | ~3¢ | ~$3.00 |
+| `claude-haiku-4-5` | ~1¢ | ~$1.00 |
+
+**Set `MODEL=claude-sonnet-5` in `.env` before charging anyone.** On Opus, a
+$12/month plan with 150 credits costs ~$7.50 in API spend — the margin doesn't
+survive Stripe's cut.
+
+## Pricing plan
+
+Researched against the Shopify App Store, Aug 2026. The market standard is a
+**monthly subscription metered by credits** (1 credit ≈ 1 generation). Nobody
+charges per generation — subscriptions give predictable revenue, and credits cap
+the AI cost exposure per user.
+
+| Tier | Price | Credits/mo | AI cost (Sonnet) | Gross margin |
+|---|---|---|---|---|
+| **Free** | $0 | 10 | ~$0.30 | the hook |
+| **Starter** | **$12**/mo | 100 | ~$3.00 | ~75% |
+| **Pro** | **$29**/mo | 400 + bulk | ~$12.00 | ~59% |
+
+### Why these numbers
+
+The market splits into a **budget cluster ($5–15)** and a **premium cluster
+($39+)**, where the premium tier is justified by bulk processing:
+
+| Competitor | Price |
+|---|---|
+| HumanizeGPT | from $5/mo |
+| AiGen | $4.99 / $9.99 / $14.99 |
+| ChatGPT‑AI Product Description | $14.90 / $49 / $199 |
+| Avada AI Product Description | from $39/mo |
+| Descrii | $39/mo unlimited |
+
+Free tiers are universal and range from 10–50 credits/month.
+
+**$12 enters the budget cluster** — where an unknown app with no reviews can
+realistically win — while **Pro at $29 undercuts Avada's $39** for the bulk
+users who are the actual profit centre.
+
+### ⚠️ The pricing ceiling
+
+**Shopify Magic is bundled free with every Shopify plan**, and it generates
+product descriptions. Every prospective customer already has a free option
+built into their admin.
+
+So Cartwright is not selling "AI writes descriptions" — that's a commodity at
+$0. It sells what Magic doesn't do: three scored versions to choose from, and
+whichever wedge gets built next. Price and positioning both have to reflect
+that.
+
+### Billing implementation
+
+Chosen: **Stripe** (keeps ~97% vs. Shopify's cut; direct customer relationship).
+
+For v1, skip building accounts — use **Stripe Payment Links** (hosted checkout,
+zero code) and issue paying customers a **licence key** they paste into the app.
+Crude, but it ships in hours instead of weeks and is fine for the first ~50
+customers. Build real accounts once people are actually paying.
+
+Prerequisites before this can be wired up: a verified Stripe account (needs
+ID, a bank account, 18+ in most countries) and a live URL for Stripe to
+redirect back to.
 
 ## What's here
 
