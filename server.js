@@ -191,7 +191,7 @@ app.get("/api/health", (_req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\n  Product Copy Studio`);
+  console.log(`\n  Cartwright — product copy, crafted`);
   console.log(`  → http://localhost:${PORT}`);
   console.log(`  → mode: ${hasApiKey ? "LIVE (" + MODEL + ")" : "DEMO (no API key set)"}\n`);
 });
