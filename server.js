@@ -64,6 +64,74 @@ Never write a number or a unit that did not come from the input.
 Vary sentence length. Lead with the most concrete benefit, not a greeting.
 `.trim();
 
+// Supplier mode. Marketplace listings are machine-translated, keyword-stuffed
+// and routinely overstate the product. Three jobs: pull out what is actually
+// knowable, say what we binned, and flag the claims a merchant would be
+// republishing under their own name without checking.
+function buildSupplierPrompt({ supplierText, keywords, tone, audience }) {
+  const toneDescription = TONES[tone] || TONES.professional;
+
+  const lines = [
+    `A merchant has imported this listing from a supplier marketplace. It is`,
+    `almost certainly machine-translated, keyword-stuffed, and written to game`,
+    `a marketplace search box rather than to inform a shopper.`,
+    ``,
+    `SUPPLIER LISTING:`,
+    `"""`,
+    supplierText.slice(0, 4000),
+    `"""`,
+    ``,
+    `STEP 1 — Extract only what is genuinely knowable about the product.`,
+    `  Keep: what the item is, materials, measurements, capacity, colours,`,
+    `  real functional features, who it is for.`,
+    `  Bin: "2024", "New", "Hot Sale", "Fashion", "High Quality", brand spam,`,
+    `  repeated keywords, ALL CAPS, and anything that tells a shopper nothing.`,
+    ``,
+    `STEP 2 — Flag claims you would not publish without checking.`,
+    `  Supplier listings routinely overstate. Anything like waterproof,`,
+    `  genuine leather, 100%, medical grade, certified, unbreakable, or a`,
+    `  specific performance number is the SUPPLIER's claim, not a fact. The`,
+    `  merchant becomes legally responsible for it once they publish it.`,
+    ``,
+    `STEP 3 — Write three descriptions using ONLY the facts from step 1.`,
+    `  Never repeat the supplier's phrasing — the merchant needs original text`,
+    `  or search engines will treat their page as duplicate content.`,
+    ``,
+    `VOICE: ${toneDescription}`,
+  ];
+
+  if (audience) lines.push(`BUYER: ${audience}`);
+  if (keywords) lines.push(`KEYWORDS to work in naturally: ${keywords}`);
+
+  lines.push(
+    ``,
+    HOUSE_RULES,
+    ``,
+    `THE THREE VERSIONS:`,
+    ...VARIANTS.map((v) => `  "${v.id}": ${v.brief}`),
+    ``,
+    `Rate each version 0-100 on persuasion and clarity only.`,
+    ``,
+    `Return JSON only, exactly this shape:`,
+    `{`,
+    `  "extracted": {`,
+    `    "productType": "what this actually is, in plain words",`,
+    `    "facts": ["each real fact you kept"],`,
+    `    "discarded": ["each piece of noise you binned"],`,
+    `    "verify": ["each supplier claim the merchant should confirm"]`,
+    `  },`,
+    `  "variants": [`,
+    `    { "id": "snappy", "title": "...", "description": "...",`,
+    `      "bullets": ["..."], "metaDescription": "...",`,
+    `      "scores": { "persuasion": 0, "clarity": 0 } }`,
+    `    // then "balanced", then "indepth"`,
+    `  ]`,
+    `}`,
+  );
+
+  return lines.join("\n");
+}
+
 function buildPrompt({ productName, features, keywords, tone, audience }) {
   const toneDescription = TONES[tone] || TONES.professional;
 
@@ -214,29 +282,136 @@ function demoResponse(input) {
   return { _demo: true, variants };
 }
 
+// Marketplace listing noise. Without an API key we still do a real (if blunt)
+// pass over the text so demo mode demonstrates the actual idea rather than
+// printing a canned paragraph.
+const NOISE = [
+  "hot sale", "new arrival", "free shipping", "high quality", "top quality",
+  "best seller", "dropshipping", "wholesale", "factory price", "brand new",
+  "fashion", "fashionable", "hot", "sale", "new", "trendy", "popular",
+  "luxury", "casual", "cute", "cool", "nice", "good", "super", "best",
+];
+
+function demoSupplierResponse(input) {
+  const raw = input.supplierText.trim();
+
+  // Split on punctuation and separators marketplace titles love.
+  const chunks = raw
+    .split(/[,|/·•\n\r]+|\s{2,}/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+
+  const discarded = [];
+  const facts = [];
+
+  for (const chunk of chunks) {
+    const lower = chunk.toLowerCase();
+    const isYear = /^(19|20)\d{2}$/.test(chunk.trim());
+    const isNoise = isYear || NOISE.some((n) => lower === n || lower.startsWith(n + " ") || lower.endsWith(" " + n));
+    if (isNoise) discarded.push(chunk);
+    else facts.push(chunk);
+  }
+
+  // Strip noise embedded inside a phrase rather than separated out — a
+  // marketplace title is usually one long run of it.
+  const cleanedFacts = facts.map((f) => {
+    let out = f.replace(/\b(19|20)\d{2}\b/g, (y) => {
+      if (!discarded.includes(y)) discarded.push(y);
+      return " ";
+    });
+    for (const n of NOISE) {
+      const re = new RegExp("\\b" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "gi");
+      if (re.test(out)) {
+        if (!discarded.includes(n)) discarded.push(n);
+        out = out.replace(re, " ");
+      }
+    }
+    return out.replace(/\s+/g, " ").trim();
+  }).filter((f) => f.length > 1);
+
+  const verify = findUnsupportedClaims("", raw).map((c) => c.text);
+  const productType = cleanedFacts[0] || "product";
+
+  const factLine = cleanedFacts.slice(0, 6).join(", ");
+  const drafts = {
+    snappy: { title: productType, body: `${productType}. ${factLine}.`, p: 60, c: 76 },
+    balanced: {
+      title: productType,
+      body: `${productType}. ${factLine}.\n\nDEMO MODE: this extraction is a rough keyword pass, not AI. ` +
+        `Add ANTHROPIC_API_KEY to your .env for the real thing.`,
+      p: 63, c: 78,
+    },
+    indepth: {
+      title: productType,
+      body: `${productType}. ${factLine}.\n\nThe live version reads the listing properly, works out what the ` +
+        `product actually is, and writes original copy that will not read as duplicate content.\n\n` +
+        `DEMO MODE: placeholder. Add your API key to see real output.`,
+      p: 64, c: 77,
+    },
+  };
+
+  const scoringInput = { ...input, productName: productType, features: cleanedFacts.join(", ") };
+
+  return {
+    _demo: true,
+    extracted: {
+      productType,
+      facts: cleanedFacts.slice(0, 10),
+      discarded: [...new Set(discarded)].slice(0, 10),
+      verify,
+    },
+    variants: VARIANTS.map((v) => {
+      const d = drafts[v.id];
+      return scoreVariant(
+        {
+          id: v.id,
+          title: d.title,
+          description: d.body,
+          bullets: cleanedFacts.slice(0, 4),
+          metaDescription: `${productType}. ${factLine}`.slice(0, 155),
+          scores: { persuasion: d.p, clarity: d.c },
+        },
+        scoringInput
+      );
+    }),
+  };
+}
+
 /* ── Routes ──────────────────────────────────────────────────────────── */
 
 app.post("/api/generate", async (req, res) => {
   const input = req.body || {};
+  const isSupplier = input.mode === "supplier";
 
-  if (!input.productName || !input.productName.trim()) {
+  if (isSupplier) {
+    if (!input.supplierText || input.supplierText.trim().length < 15) {
+      return res.status(400).json({
+        error: "Paste the supplier's product title and description to clean up.",
+      });
+    }
+  } else if (!input.productName || !input.productName.trim()) {
     return res.status(400).json({ error: "Enter a product name to generate copy." });
   }
 
   if (!hasApiKey) {
-    return res.json(demoResponse(input));
+    return res.json(isSupplier ? demoSupplierResponse(input) : demoResponse(input));
   }
 
   try {
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 2600,
+      max_tokens: isSupplier ? 3200 : 2600,
       output_config: { effort: "medium" },
       system:
         "You are a working e-commerce copywriter. You write specific, grounded " +
         "product copy that never sounds machine-generated, and you never invent " +
         "facts about a product. You always return valid JSON and nothing else.",
-      messages: [{ role: "user", content: buildPrompt(input) }],
+      messages: [
+        {
+          role: "user",
+          content: isSupplier ? buildSupplierPrompt(input) : buildPrompt(input),
+        },
+      ],
     });
 
     const text = response.content
@@ -255,7 +430,25 @@ app.post("/api/generate", async (req, res) => {
       return res.status(502).json({ error: "The model returned an unexpected shape. Try again." });
     }
 
-    return res.json({ variants: parsed.variants.map((v) => scoreVariant(v, input)) });
+    // In supplier mode the copy is checked against the *extracted* facts, not
+    // the raw listing — otherwise the supplier's own exaggerations would pass
+    // through unflagged. Their dubious claims are surfaced separately as
+    // "verify", so the merchant sees both kinds.
+    const scoringInput = isSupplier
+      ? {
+          ...input,
+          productName: (parsed.extracted && parsed.extracted.productType) || "",
+          features: [
+            ...((parsed.extracted && parsed.extracted.facts) || []),
+            ...((parsed.extracted && parsed.extracted.verify) || []),
+          ].join(", "),
+        }
+      : input;
+
+    return res.json({
+      extracted: parsed.extracted || null,
+      variants: parsed.variants.map((v) => scoreVariant(v, scoringInput)),
+    });
   } catch (err) {
     console.error("Generation failed:", err);
     return res.status(500).json({ error: "Generation failed. Check the server logs." });

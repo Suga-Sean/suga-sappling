@@ -193,6 +193,41 @@
         color: var(--muted); margin-bottom: 18px; }
       .verified svg { color: var(--gold); flex: none; }
 
+      /* Mode switcher — write from scratch, or clean up a supplier listing */
+      .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+        background: var(--surface-2); border: 1px solid var(--border);
+        border-radius: 10px; padding: 4px; margin: 0 20px 4px; }
+      .mode { text-align: center; font-size: .82rem; font-weight: 600; padding: 8px 6px;
+        border: none; background: transparent; color: var(--muted); border-radius: 7px;
+        cursor: pointer; font-family: inherit; }
+      .mode:hover { color: var(--text); }
+      .mode.on { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
+      #supplierText { min-height: 132px; font-size: .86rem; line-height: 1.5; }
+      .hint { font-size: .76rem; color: var(--faint); margin: 6px 0 0; }
+
+      /* What we pulled out of the supplier's listing */
+      .extract { background: var(--surface-2); border: 1px solid var(--border);
+        border-radius: 11px; padding: 15px; margin-bottom: 18px; }
+      .extract h4 { margin: 0 0 3px; font-size: .72rem; font-weight: 700; letter-spacing: .06em;
+        text-transform: uppercase; color: var(--faint); }
+      .extract .ptype { font-size: .95rem; font-weight: 600; margin: 0 0 13px; }
+      .xgroup { margin-top: 12px; }
+      .xgroup h5 { margin: 0 0 6px; font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+        text-transform: uppercase; display: flex; align-items: center; gap: 5px; }
+      .xgroup.keep h5 { color: var(--gold); }
+      .xgroup.bin h5 { color: var(--faint); }
+      .xgroup.check h5 { color: var(--accent); }
+      .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+      .chip { font-size: .75rem; border-radius: 6px; padding: 3px 9px; border: 1px solid var(--border);
+        background: var(--surface); }
+      .xgroup.keep .chip { border-color: var(--gold-line); }
+      .xgroup.bin .chip { color: var(--faint); text-decoration: line-through; opacity: .75; }
+      .xgroup.check .chip { border-color: var(--accent); }
+      .xgroup p { margin: 5px 0 0; font-size: .76rem; color: var(--muted); }
+      .unique { display: flex; align-items: center; gap: 7px; font-size: .78rem; color: var(--muted);
+        margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); }
+      .unique svg { color: var(--gold); flex: none; }
+
       .out-foot { border-top: 1px solid var(--border); padding: 12px 20px; display: flex; gap: 10px;
         justify-content: flex-end; background: var(--surface); border-radius: 0 0 var(--radius) var(--radius); }
       .ghost { background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 9px;
@@ -225,14 +260,25 @@
     <div class="wrap">
       <section class="card">
         <div class="card-head">
-          <h2>Product details</h2>
-          <p>Give the basics — the AI writes three versions.</p>
+          <h2 id="cardTitle">Product details</h2>
+          <p id="cardSub">Give the basics — the AI writes three versions.</p>
+        </div>
+        <div class="modes" id="modes">
+          <button type="button" class="mode on" data-mode="details">Write from scratch</button>
+          <button type="button" class="mode" data-mode="supplier">Clean up supplier text</button>
         </div>
         <form id="form">
-          <label for="name">Product name <span class="req">*</span></label>
-          <input id="name" placeholder="Stainless Steel Insulated Water Bottle" required />
-          <label for="features">Features / details</label>
-          <textarea id="features" placeholder="750ml, keeps drinks cold 24h, leak-proof lid, matte finish"></textarea>
+          <div id="detailsFields">
+            <label for="name">Product name <span class="req">*</span></label>
+            <input id="name" placeholder="Stainless Steel Insulated Water Bottle" />
+            <label for="features">Features / details</label>
+            <textarea id="features" placeholder="750ml, keeps drinks cold 24h, leak-proof lid, matte finish"></textarea>
+          </div>
+          <div id="supplierFields" hidden>
+            <label for="supplierText">Supplier listing <span class="req">*</span></label>
+            <textarea id="supplierText" placeholder="Paste the supplier's title and description here, exactly as it came — machine translation, keyword spam and all."></textarea>
+            <p class="hint">Cartwright strips the noise, flags claims you'd be republishing, and writes original copy so your page isn't duplicate content.</p>
+          </div>
           <label for="audience">Target customer</label>
           <input id="audience" placeholder="gym-goers and commuters" />
           <label for="keywords">SEO keywords <span style="text-transform:none;font-weight:400;letter-spacing:0">(optional)</span></label>
@@ -276,6 +322,33 @@
       const LABELS = { snappy: "Snappy", balanced: "Balanced", indepth: "In-Depth" };
       const SUBS = { snappy: "short & punchy", balanced: "the all-rounder", indepth: "rich & detailed" };
 
+      // Element handles first, so everything below can rely on them.
+      const form = document.getElementById("form");
+      const out = document.getElementById("out");
+      const tabs = document.getElementById("tabs");
+      const foot = document.getElementById("foot");
+      const go = document.getElementById("go");
+
+      const SPARK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>';
+
+      let mode = "details";
+      const modesEl = document.getElementById("modes");
+      modesEl.addEventListener("click", (e) => {
+        const b = e.target.closest(".mode");
+        if (!b) return;
+        modesEl.querySelectorAll(".mode").forEach((x) => x.classList.remove("on"));
+        b.classList.add("on");
+        mode = b.dataset.mode;
+        const supplier = mode === "supplier";
+        document.getElementById("detailsFields").hidden = supplier;
+        document.getElementById("supplierFields").hidden = !supplier;
+        document.getElementById("cardTitle").textContent = supplier ? "Supplier listing" : "Product details";
+        document.getElementById("cardSub").textContent = supplier
+          ? "Paste the mess — we'll work out what's actually true."
+          : "Give the basics — the AI writes three versions.";
+        go.innerHTML = SPARK + (supplier ? " Clean up and rewrite" : " Generate 3 versions");
+      });
+
       let tone = "professional";
       const tonesEl = document.getElementById("tones");
       tonesEl.addEventListener("click", (e) => {
@@ -286,13 +359,8 @@
         tone = t.dataset.tone;
       });
 
-      const form = document.getElementById("form");
-      const out = document.getElementById("out");
-      const tabs = document.getElementById("tabs");
-      const foot = document.getElementById("foot");
-      const go = document.getElementById("go");
-
       let variants = [];
+      let extracted = null;
       let active = 0;
 
       fetch("/api/health").then((r) => r.json()).then((h) => {
@@ -337,6 +405,26 @@
           '<div class="tags">' + flags.map((f) => '<span class="tag">' + esc(f.text) + "</span>").join("") + "</div></div>";
       }
 
+      // What we pulled out of the supplier's listing, and what we threw away.
+      function extractBlock() {
+        if (!extracted) return "";
+        const group = (cls, icon, heading, items, note) => {
+          if (!items || items.length === 0) return "";
+          return '<div class="xgroup ' + cls + '"><h5>' + icon + " " + heading + "</h5>" +
+            '<div class="chips">' + items.map((i) => '<span class="chip">' + esc(i) + "</span>").join("") + "</div>" +
+            (note ? "<p>" + note + "</p>" : "") + "</div>";
+        };
+        return '<div class="extract"><h4>What we found in the listing</h4>' +
+          '<p class="ptype">' + esc(extracted.productType || "") + "</p>" +
+          group("keep", "✓", "Kept", extracted.facts) +
+          group("check", "⚠", "Verify before publishing", extracted.verify,
+            "These are the supplier's claims, not established facts. Publish them and they become yours.") +
+          group("bin", "✕", "Binned as noise", extracted.discarded) +
+          '<div class="unique">' +
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>' +
+          'Written from scratch — not the same text as every other store selling this.</div></div>';
+      }
+
       function renderActive() {
         const d = variants[active];
         const bullets = (d.bullets || []).map((b) => "<li>" + esc(b) + "</li>").join("");
@@ -345,6 +433,7 @@
           '<li class="' + (x.ok ? "" : "no") + '">' + esc(x.label) + "</li>").join("");
 
         out.innerHTML =
+          extractBlock() +
           '<p class="field-label">Title</p><h1 class="result-title">' + esc(d.title || "") + "</h1>" +
           '<p class="field-label">Description</p><p class="result-desc">' + esc(d.description || "") + "</p>" +
           (bullets ? '<p class="field-label">Selling points</p><ul class="result-bullets">' + bullets + "</ul>" : "") +
@@ -383,36 +472,48 @@
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const name = document.getElementById("name").value.trim();
-        if (!name) return;
+
+        const payload = {
+          mode,
+          audience: document.getElementById("audience").value,
+          keywords: document.getElementById("keywords").value,
+          tone,
+        };
+
+        if (mode === "supplier") {
+          payload.supplierText = document.getElementById("supplierText").value.trim();
+          if (payload.supplierText.length < 15) return;
+        } else {
+          payload.productName = document.getElementById("name").value.trim();
+          payload.features = document.getElementById("features").value;
+          if (!payload.productName) return;
+        }
+
         go.disabled = true;
-        go.innerHTML = '<span class="spinner"></span> Writing three versions…';
+        go.innerHTML = '<span class="spinner"></span> ' +
+          (mode === "supplier" ? "Cleaning up…" : "Writing three versions…");
         foot.style.display = "none";
         skeleton();
+
         try {
           const res = await fetch("/api/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              productName: name,
-              features: document.getElementById("features").value,
-              audience: document.getElementById("audience").value,
-              keywords: document.getElementById("keywords").value,
-              tone,
-            }),
+            body: JSON.stringify(payload),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Request failed");
           variants = data.variants || [];
+          extracted = data.extracted || null;
           active = 1;
           renderTabs();
           renderActive();
           foot.style.display = "flex";
         } catch (err) {
-          out.innerHTML = '<div class="empty" style="min-height:200px"><p>Error: ' + esc(err.message) + "</p></div>";
+          out.innerHTML = '<div class="empty" style="min-height:200px"><p>' + esc(err.message) + "</p></div>";
         } finally {
           go.disabled = false;
-          go.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg> Generate 3 versions';
+          go.innerHTML = SPARK + (mode === "supplier" ? " Clean up and rewrite" : " Generate 3 versions");
         }
       });
 

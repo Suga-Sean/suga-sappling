@@ -159,16 +159,23 @@ function seoScore({ title = "", description = "", metaDescription = "", keywords
 // merchant never mentioned it, that is a claim they may not be able to back.
 const CLAIM_WORDS = [
   "waterproof", "water-resistant", "windproof", "shockproof", "fireproof",
-  "bpa-free", "bpa free", "organic", "vegan", "cruelty-free", "hypoallergenic",
+  "bpa-free", "organic", "vegan", "cruelty-free", "hypoallergenic",
   "certified", "guaranteed", "warranty", "lifetime", "dishwasher-safe",
-  "dishwasher safe", "microwave-safe", "food-grade", "medical-grade",
-  "stainless", "leak-proof", "leakproof", "recyclable", "biodegradable",
-  "handmade", "hand-made", "eco-friendly", "sustainable", "patented",
+  "microwave-safe", "food-grade", "medical-grade",
+  "stainless", "leak-proof", "recyclable", "biodegradable",
+  "handmade", "eco-friendly", "sustainable", "patented",
   "fda", "ce-certified", "iso",
+  // Marketplace listings lean hard on these, and they are exactly the claims
+  // a merchant becomes liable for once they republish them.
+  "genuine leather", "real leather", "solid wood", "solid gold",
+  "sterling silver", "authentic", "unbreakable", "scratch-proof",
+  "anti-bacterial", "antibacterial", "non-toxic", "gmo-free", "gluten-free",
 ];
 
 // Numbers carrying a unit — "750ml", "24 hours", "5-year", "100%", "IP68".
-const MEASUREMENT = /\b\d+(?:\.\d+)?\s?(?:ml|l|litre|liter|oz|g|kg|lb|lbs|mm|cm|m|in|inch|inches|ft|hour|hours|hr|hrs|day|days|week|weeks|month|months|year|years|%|w|watt|watts|v|volt|volts|mah|ip\d{2})\b/gi;
+// A negative lookahead rather than \b, because \b fails after a symbol unit
+// like "%" (both sides are non-word characters, so no boundary exists).
+const MEASUREMENT = /\b\d+(?:\.\d+)?\s?(?:ml|l|litre|liter|oz|g|kg|lb|lbs|mm|cm|m|in|inch|inches|ft|hour|hours|hr|hrs|day|days|week|weeks|month|months|year|years|%|w|watt|watts|v|volt|volts|mah|ip\d{2})(?![a-z0-9])/gi;
 
 // Collapse punctuation and spacing so "leak-proof", "leak proof" and
 // "Leak-Proof" all compare equal. Both sides must be flattened the same way
