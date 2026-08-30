@@ -170,13 +170,24 @@ const CLAIM_WORDS = [
 // Numbers carrying a unit — "750ml", "24 hours", "5-year", "100%", "IP68".
 const MEASUREMENT = /\b\d+(?:\.\d+)?\s?(?:ml|l|litre|liter|oz|g|kg|lb|lbs|mm|cm|m|in|inch|inches|ft|hour|hours|hr|hrs|day|days|week|weeks|month|months|year|years|%|w|watt|watts|v|volt|volts|mah|ip\d{2})\b/gi;
 
+// Collapse punctuation and spacing so "leak-proof", "leak proof" and
+// "Leak-Proof" all compare equal. Both sides must be flattened the same way
+// or a hyphenated fact the merchant *did* supply gets falsely flagged.
+function flatten(s) {
+  return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function findUnsupportedClaims(sourceText, generatedText) {
-  const source = normalise(sourceText);
-  const generated = generatedText.toLowerCase();
+  const source = flatten(sourceText);
+  const generated = flatten(generatedText);
   const flags = [];
+  const already = new Set();
 
   for (const word of CLAIM_WORDS) {
-    if (generated.includes(word) && !source.includes(word)) {
+    const w = flatten(word);
+    if (already.has(w)) continue;
+    if (generated.includes(w) && !source.includes(w)) {
+      already.add(w);
       flags.push({ type: "claim", text: word });
     }
   }
