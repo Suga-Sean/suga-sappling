@@ -216,4 +216,60 @@ function findUnsupportedClaims(sourceText, generatedText) {
   return flags.slice(0, 8); // keep the UI readable
 }
 
-module.exports = { readabilityScore, seoScore, findUnsupportedClaims };
+/* ── Slop detection ──────────────────────────────────────────────────── */
+
+// The house rules in the prompt tell the model what not to write. This is the
+// enforcement: we read what actually came back and check. A rule nobody
+// verifies is a wish, and the model will occasionally drift no matter how the
+// prompt is worded.
+
+const BANNED_PHRASES = [
+  "meet the", "introducing the", "say hello to", "say goodbye to",
+  "look no further", "in today's", "in a world", "whether you're",
+  "designed for those who", "perfect for anyone who", "for those who demand",
+  "elevate your", "elevate the", "take it to the next level",
+  "game changer", "game-changer", "must have", "must-have",
+  "thoughtfully crafted", "thoughtfully designed", "thoughtfully engineered",
+  "expertly crafted", "meticulously crafted", "carefully crafted",
+  "sleek and stylish", "style and function", "form and function",
+  "experience the difference", "transform your", "unlock the",
+  "revolutionize", "revolutionise", "seamlessly", "effortlessly",
+  "the ultimate", "your new favorite", "your new favourite",
+  "not just a", "more than just a", "one of a kind",
+  "state of the art", "state-of-the-art", "cutting edge", "cutting-edge",
+  "premium quality", "top-notch", "unparalleled", "unrivaled", "unrivalled",
+];
+
+// Empty intensifiers. A couple is fine; a pile of them means the copy is
+// padding instead of saying anything.
+const FILLER_WORDS = [
+  "amazing", "incredible", "stunning", "gorgeous", "beautiful", "perfect",
+  "ultimate", "premium", "luxurious", "exquisite", "superb", "exceptional",
+  "outstanding", "remarkable", "extraordinary", "fantastic", "wonderful",
+];
+
+function detectSlop(text) {
+  const flat = flatten(text);
+  const hits = [];
+
+  for (const phrase of BANNED_PHRASES) {
+    if (flat.includes(flatten(phrase))) hits.push(phrase);
+  }
+
+  const words = flat.split(" ");
+  const fillerCount = words.filter((w) => FILLER_WORDS.includes(w)).length;
+  // One or two adjectives is normal writing. Three or more in a short product
+  // description means the copy is decorating rather than informing.
+  const fillerHeavy = fillerCount >= 3;
+
+  return {
+    phrases: hits.slice(0, 6),
+    fillerCount,
+    fillerHeavy,
+    // A single stock phrase is a slip; several, or heavy filler, means the
+    // model reverted to generic copy and the draft should be regenerated.
+    isSlop: hits.length >= 2 || (hits.length >= 1 && fillerHeavy) || fillerCount >= 5,
+  };
+}
+
+module.exports = { readabilityScore, seoScore, findUnsupportedClaims, detectSlop };

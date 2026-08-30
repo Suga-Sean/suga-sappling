@@ -3,7 +3,12 @@ require("dotenv").config();
 const path = require("path");
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
-const { readabilityScore, seoScore, findUnsupportedClaims } = require("./quality");
+const {
+  readabilityScore,
+  seoScore,
+  findUnsupportedClaims,
+  detectSlop,
+} = require("./quality");
 
 const app = express();
 app.use(express.json());
@@ -377,6 +382,52 @@ function demoSupplierResponse(input) {
   };
 }
 
+/* ── Model plumbing ──────────────────────────────────────────────────── */
+
+// One request, parsed. Returns null if the response wasn't usable JSON so the
+// caller can decide whether to retry or give up.
+async function callModel(promptText, maxTokens) {
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: maxTokens,
+    output_config: { effort: "medium" },
+    system:
+      "You are a working e-commerce copywriter. You write specific, grounded " +
+      "product copy that never sounds machine-generated, and you never invent " +
+      "facts about a product. You always return valid JSON and nothing else.",
+    messages: [{ role: "user", content: promptText }],
+  });
+
+  const text = response.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+
+  try {
+    const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+    return Array.isArray(parsed.variants) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Slop across all three drafts, merged. One bad draft is enough to regenerate,
+// because the merchant sees all three.
+function worstSlop(variants) {
+  const all = { phrases: [], fillerCount: 0, fillerHeavy: false, isSlop: false };
+  for (const v of variants || []) {
+    const text = [v.title, v.description, (v.bullets || []).join(" ")]
+      .filter(Boolean)
+      .join(" ");
+    const r = detectSlop(text);
+    for (const p of r.phrases) if (!all.phrases.includes(p)) all.phrases.push(p);
+    all.fillerCount = Math.max(all.fillerCount, r.fillerCount);
+    all.fillerHeavy = all.fillerHeavy || r.fillerHeavy;
+    all.isSlop = all.isSlop || r.isSlop;
+  }
+  return all;
+}
+
 /* ── Routes ──────────────────────────────────────────────────────────── */
 
 app.post("/api/generate", async (req, res) => {
@@ -398,32 +449,43 @@ app.post("/api/generate", async (req, res) => {
   }
 
   try {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: isSupplier ? 3200 : 2600,
-      output_config: { effort: "medium" },
-      system:
-        "You are a working e-commerce copywriter. You write specific, grounded " +
-        "product copy that never sounds machine-generated, and you never invent " +
-        "facts about a product. You always return valid JSON and nothing else.",
-      messages: [
-        {
-          role: "user",
-          content: isSupplier ? buildSupplierPrompt(input) : buildPrompt(input),
-        },
-      ],
-    });
+    const prompt = isSupplier ? buildSupplierPrompt(input) : buildPrompt(input);
+    const maxTokens = isSupplier ? 3200 : 2600;
 
-    const text = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-
-    let parsed;
-    try {
-      parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
-    } catch {
+    let parsed = await callModel(prompt, maxTokens);
+    if (!parsed) {
       return res.status(502).json({ error: "The model returned something we couldn't read. Try again." });
+    }
+
+    // Enforce the house rules rather than trusting them. If the copy came back
+    // full of stock phrases, tell the model exactly which ones it used and ask
+    // again — once. A second failure is returned anyway, flagged, rather than
+    // spending the merchant's credit indefinitely.
+    let slop = worstSlop(parsed.variants);
+    let regenerated = false;
+
+    if (slop.isSlop) {
+      const correction =
+        prompt +
+        `\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED.\n` +
+        `It used these banned phrases: ${slop.phrases.join(", ") || "(none)"}.\n` +
+        (slop.fillerHeavy
+          ? `It also leaned on empty adjectives instead of facts.\n`
+          : "") +
+        `Write it again. Every sentence must fail the swap test — it must be ` +
+        `false or absurd if applied to a different product. Lead with a ` +
+        `concrete fact, not a greeting.`;
+
+      const second = await callModel(correction, maxTokens);
+      if (second) {
+        const secondSlop = worstSlop(second.variants);
+        // Keep whichever draft is cleaner.
+        if (!secondSlop.isSlop || secondSlop.phrases.length < slop.phrases.length) {
+          parsed = second;
+          slop = secondSlop;
+        }
+        regenerated = true;
+      }
     }
 
     if (!Array.isArray(parsed.variants) || parsed.variants.length === 0) {
@@ -447,6 +509,9 @@ app.post("/api/generate", async (req, res) => {
 
     return res.json({
       extracted: parsed.extracted || null,
+      // Surfaced so the UI can be honest when a draft still isn't clean,
+      // rather than quietly handing over copy we know reads as generic.
+      slop: slop.isSlop ? { phrases: slop.phrases, regenerated } : null,
       variants: parsed.variants.map((v) => scoreVariant(v, scoringInput)),
     });
   } catch (err) {
