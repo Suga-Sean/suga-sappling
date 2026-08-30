@@ -168,6 +168,30 @@
       .bar-fill { display: block; height: 100%; background: var(--gold); border-radius: 999px; width: 0;
         transition: width 0.65s cubic-bezier(.2,.7,.2,1); }
       .bar-row .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--gold); font-weight: 700; }
+      .bar-row .lbl .how { display: block; font-size: .62rem; letter-spacing: .04em;
+        text-transform: uppercase; color: var(--faint); font-weight: 600; }
+      .why { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--gold-line); }
+      .why summary { cursor: pointer; font-size: .74rem; color: var(--muted); list-style: none; }
+      .why summary::-webkit-details-marker { display: none; }
+      .why summary::before { content: "▸ "; color: var(--gold); }
+      .why[open] summary::before { content: "▾ "; }
+      .why ul { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+      .why li { display: flex; gap: 8px; font-size: .76rem; color: var(--muted); align-items: flex-start; }
+      .why li::before { content: "✓"; color: var(--gold); font-weight: 700; flex: none; }
+      .why li.no::before { content: "✕"; color: var(--accent); }
+
+      /* Invented-claim warnings — a merchant can be penalised for these */
+      .claims { background: var(--accent-soft); border: 1px solid var(--accent);
+        border-radius: 10px; padding: 13px 15px; margin-bottom: 18px; }
+      .claims h5 { margin: 0 0 6px; font-size: .74rem; font-weight: 700; letter-spacing: .05em;
+        text-transform: uppercase; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+      .claims p { margin: 0 0 9px; font-size: .81rem; color: var(--muted); }
+      .claims .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+      .claims .tag { font-size: .76rem; background: var(--surface); border: 1px solid var(--accent);
+        color: var(--text); border-radius: 6px; padding: 3px 9px; font-weight: 500; }
+      .verified { display: flex; align-items: center; gap: 7px; font-size: .78rem;
+        color: var(--muted); margin-bottom: 18px; }
+      .verified svg { color: var(--gold); flex: none; }
 
       .out-foot { border-top: 1px solid var(--border); padding: 12px 20px; display: flex; gap: 10px;
         justify-content: flex-end; background: var(--surface); border-radius: 0 0 var(--radius) var(--radius); }
@@ -292,25 +316,53 @@
         );
       }
 
-      const bar = (label, val) => '<div class="bar-row"><span class="lbl">' + label + '</span>' +
+      const bar = (label, val, how) => '<div class="bar-row"><span class="lbl">' + label +
+        '<span class="how">' + how + '</span></span>' +
         '<span class="bar-track"><span class="bar-fill" style="width:' + val + '%"></span></span>' +
         '<span class="val">' + val + '</span></div>';
+
+      // Claims the copy makes that weren't in what the merchant typed. Worth
+      // surfacing loudly — inventing specs is a real advertising risk.
+      function claimsBlock(d) {
+        const flags = d.claims || [];
+        if (flags.length === 0) {
+          return '<div class="verified">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>' +
+            'Every fact in this copy came from your product details — nothing invented.</div>';
+        }
+        return '<div class="claims"><h5>' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>' +
+          'Check these ' + flags.length + ' claim' + (flags.length > 1 ? "s" : "") + '</h5>' +
+          '<p>These appear in the copy but not in your product details. Confirm they are true before publishing.</p>' +
+          '<div class="tags">' + flags.map((f) => '<span class="tag">' + esc(f.text) + "</span>").join("") + "</div></div>";
+      }
 
       function renderActive() {
         const d = variants[active];
         const bullets = (d.bullets || []).map((b) => "<li>" + esc(b) + "</li>").join("");
         const s = d.scores || { seo: 0, readability: 0, persuasion: 0, clarity: 0 };
+        const detail = (d.seoDetail || []).map((x) =>
+          '<li class="' + (x.ok ? "" : "no") + '">' + esc(x.label) + "</li>").join("");
+
         out.innerHTML =
           '<p class="field-label">Title</p><h1 class="result-title">' + esc(d.title || "") + "</h1>" +
           '<p class="field-label">Description</p><p class="result-desc">' + esc(d.description || "") + "</p>" +
           (bullets ? '<p class="field-label">Selling points</p><ul class="result-bullets">' + bullets + "</ul>" : "") +
           (d.metaDescription ? '<div class="meta"><span class="count">' + d.metaDescription.length +
             ' chars</span><strong>SEO meta:</strong> ' + esc(d.metaDescription) + "</div>" : "") +
+          claimsBlock(d) +
           '<div class="score"><div class="score-head"><h4>' +
           '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.5 13.5 17 22l-5-3-5 3 1.5-8.5"/></svg>' +
           ' Listing Score</h4><div class="score-overall">' + overall(s) + '<small>/100</small></div></div>' +
-          '<div class="bars">' + bar("SEO", s.seo) + bar("Readability", s.readability) +
-          bar("Persuasion", s.persuasion) + bar("Clarity", s.clarity) + "</div></div>";
+          '<div class="bars">' +
+            bar("SEO", s.seo, "measured") +
+            bar("Readability", s.readability, "measured") +
+            bar("Persuasion", s.persuasion, "judged") +
+            bar("Clarity", s.clarity, "judged") +
+          "</div>" +
+          (detail ? '<details class="why"><summary>Why this SEO score</summary><ul>' + detail + "</ul></details>" : "") +
+          "</div>";
+
         requestAnimationFrame(() => {
           out.querySelectorAll(".bar-fill").forEach((el) => {
             const w = el.style.width; el.style.width = "0"; requestAnimationFrame(() => (el.style.width = w));

@@ -3,159 +3,240 @@ require("dotenv").config();
 const path = require("path");
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
+const { readabilityScore, seoScore, findUnsupportedClaims } = require("./quality");
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 // The SDK reads ANTHROPIC_API_KEY from the environment automatically.
-// If no key is set, we run in "demo" mode and return templated copy so the
-// app is still runnable without credentials.
+// Without a key we run in "demo" mode so the app is still usable.
 const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
 const client = hasApiKey ? new Anthropic() : null;
 
-// Default to Opus 5. To cut cost on high volume, set MODEL=claude-sonnet-5
-// (see README — that's the pragmatic pick once you have paying users).
+// Opus for development quality. Set MODEL=claude-sonnet-5 in .env before
+// serving paying customers — see the cost table in the README.
 const MODEL = process.env.MODEL || "claude-opus-5";
 
 const TONES = {
-  professional: "professional and trustworthy",
-  playful: "playful, fun, and casual",
-  luxury: "premium, elegant, and aspirational",
-  minimal: "clean, minimal, and to-the-point",
+  professional: "plain, confident, and factual — like a good catalogue",
+  playful: "warm and conversational, light humour, still specific",
+  luxury: "restrained and precise; understatement rather than adjectives",
+  minimal: "stripped back — short declarative sentences, no filler",
 };
 
-// The three length "personalities" we generate in one go.
 const VARIANTS = [
-  {
-    id: "snappy",
-    label: "Snappy",
-    brief: "SHORT and punchy — 1 tight paragraph (2-3 sentences), scannable, grabs attention fast.",
-  },
-  {
-    id: "balanced",
-    label: "Balanced",
-    brief: "MEDIUM — 2 short paragraphs, the everyday all-rounder most stores would use.",
-  },
-  {
-    id: "indepth",
-    label: "In-Depth",
-    brief: "LONG and rich — 3 paragraphs, more detail and more SEO keywords woven in naturally.",
-  },
+  { id: "snappy", brief: "SHORT — 2-3 sentences, one paragraph. Every sentence carries a fact." },
+  { id: "balanced", brief: "MEDIUM — 2 short paragraphs. The everyday default." },
+  { id: "indepth", brief: "LONG — 3 paragraphs, more detail and more room for keywords." },
 ];
+
+// The anti-slop rules. This is the actual product: any tool can call an AI,
+// but generic AI copy is worthless to a merchant because shoppers recognise
+// it instantly. These constraints are what make the output usable.
+const HOUSE_RULES = `
+WRITING RULES — these matter more than anything else.
+
+Never use these openers or anything resembling them:
+  "Meet the...", "Introducing...", "Say hello to...", "Look no further",
+  "Not just a X, it's a Y", "In today's world", "Whether you're X or Y"
+
+Never use these words and phrases:
+  elevate, elevated, game-changer, revolutionary, seamless, effortless,
+  thoughtfully crafted/designed/engineered, sleek and stylish, must-have,
+  take it to the next level, perfect for anyone who, designed for those who,
+  unlock, transform your, experience the difference
+
+THE SWAP TEST — apply this to every sentence you write.
+If a sentence would still make sense with a completely different product
+swapped in, delete it. "Built to make life easier" works for a kettle, a
+mattress and a laptop, so it is worthless. "The 750ml body holds a full day
+of water without a refill" only works for one product. Write only the second
+kind.
+
+GROUND EVERY CLAIM.
+Use the specifics you were given. Do not invent measurements, materials,
+certifications, warranties, or capabilities that were not provided — a
+merchant can be penalised for false advertising. If you were given very
+little, write something SHORT and true rather than padding with adjectives.
+Never write a number or a unit that did not come from the input.
+
+Vary sentence length. Lead with the most concrete benefit, not a greeting.
+`.trim();
 
 function buildPrompt({ productName, features, keywords, tone, audience }) {
   const toneDescription = TONES[tone] || TONES.professional;
 
   const lines = [
-    `Write THREE e-commerce product descriptions for the same product, each a different length.`,
+    `Write THREE product descriptions for the same item, at three lengths.`,
     ``,
-    `Product: ${productName}`,
-    `Tone: ${toneDescription}.`,
+    `PRODUCT: ${productName}`,
+    `VOICE: ${toneDescription}`,
   ];
 
-  if (audience) lines.push(`Target customer: ${audience}.`);
-  if (features) lines.push(`Key features/details to work in:\n${features}`);
-  if (keywords) lines.push(`SEO keywords to include naturally: ${keywords}`);
+  if (audience) lines.push(`BUYER: ${audience}`);
+  if (features) lines.push(`FACTS YOU MAY USE (and only these):\n${features}`);
+  else lines.push(`FACTS: none supplied — keep the copy short and generic-free.`);
+  if (keywords) lines.push(`KEYWORDS to work in naturally: ${keywords}`);
 
   lines.push(
     ``,
-    `The three versions:`,
-    ...VARIANTS.map((v) => `- "${v.id}": ${v.brief}`),
+    HOUSE_RULES,
     ``,
-    `For EACH version also rate it 0-100 on four qualities, based only on the copy itself:`,
-    `  seo (keyword strength), readability (easy to scan), persuasion (emotional pull),`,
-    `  clarity (clear about what the product is).`,
+    `THE THREE VERSIONS:`,
+    ...VARIANTS.map((v) => `  "${v.id}": ${v.brief}`),
     ``,
-    `Return JSON only, exactly this shape:`,
+    `Also rate each version 0-100 on two things only:`,
+    `  persuasion — does it make someone want the product?`,
+    `  clarity    — is it obvious what the product is and does?`,
+    `(SEO and readability are measured separately, so do not rate those.)`,
+    ``,
+    `Return JSON only, in exactly this shape:`,
     `{`,
     `  "variants": [`,
     `    {`,
     `      "id": "snappy",`,
-    `      "title": "short catchy title, max 70 chars",`,
-    `      "description": "the body copy for this length",`,
-    `      "bullets": ["3 to 5 selling-point bullets"],`,
-    `      "metaDescription": "SEO meta description under 155 chars",`,
-    `      "scores": { "seo": 0, "readability": 0, "persuasion": 0, "clarity": 0 }`,
+    `      "title": "specific title, max 70 chars",`,
+    `      "description": "the body copy",`,
+    `      "bullets": ["3 to 5 concrete selling points"],`,
+    `      "metaDescription": "SEO meta, aim for 120-155 characters",`,
+    `      "scores": { "persuasion": 0, "clarity": 0 }`,
     `    }`,
-    `    // ...one object for "balanced" and one for "indepth", same shape`,
+    `    // then "balanced", then "indepth", same shape`,
     `  ]`,
     `}`,
-    ``,
-    `Do not invent specific claims (exact dimensions, certifications, prices) that were`,
-    `not provided. Write for conversion.`,
   );
 
   return lines.join("\n");
 }
 
-function demoVariant(id, productName, tone) {
-  const map = {
+// Attaches the computed half of the score plus any invented-claim flags.
+// Called for both live and demo output so the two behave identically.
+function scoreVariant(variant, input) {
+  const sourceText = [input.productName, input.features, input.keywords, input.audience]
+    .filter(Boolean)
+    .join(" \n ");
+
+  const generatedText = [
+    variant.title,
+    variant.description,
+    (variant.bullets || []).join(" "),
+    variant.metaDescription,
+  ]
+    .filter(Boolean)
+    .join(" \n ");
+
+  const readability = readabilityScore(
+    [variant.description, (variant.bullets || []).join(". ")].join(" ")
+  );
+  const seo = seoScore({
+    title: variant.title,
+    description: [variant.description, (variant.bullets || []).join(" ")].join(" "),
+    metaDescription: variant.metaDescription,
+    keywords: input.keywords,
+  });
+
+  const judged = variant.scores || {};
+  const scores = {
+    seo: seo.score,
+    readability,
+    persuasion: clamp(judged.persuasion),
+    clarity: clamp(judged.clarity),
+  };
+
+  return {
+    ...variant,
+    scores,
+    // Which numbers are arithmetic and which are the model's opinion. Shown
+    // in the UI — a score you can't explain isn't worth much.
+    measured: ["seo", "readability"],
+    judged: ["persuasion", "clarity"],
+    seoDetail: seo.detail,
+    claims: findUnsupportedClaims(sourceText, generatedText),
+  };
+}
+
+function clamp(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 0;
+}
+
+/* ── Demo mode ───────────────────────────────────────────────────────── */
+
+function demoResponse(input) {
+  const name = input.productName;
+  const facts = (input.features || "").trim();
+  const factLine = facts ? ` ${facts}.` : "";
+
+  const drafts = {
     snappy: {
-      title: `${productName} — Everyday Upgrade`,
-      description: `Meet the ${productName}: simple, reliable, and ready to impress. The easy upgrade your customers didn't know they needed.`,
-      scores: { seo: 71, readability: 92, persuasion: 78, clarity: 88 },
+      title: `${name}`,
+      description: `${name}.${factLine} In stock and shipping now.`,
+      persuasion: 62,
+      clarity: 78,
     },
     balanced: {
-      title: `${productName} — Quality You Can Trust`,
+      title: `${name} — the details`,
       description:
-        `Meet the ${productName}, designed to make everyday life simpler. Thoughtfully built and ready to impress, it delivers the quality your customers expect.\n\n` +
-        `Backed by fast, friendly support and a price that keeps them coming back.`,
-      scores: { seo: 80, readability: 85, persuasion: 82, clarity: 86 },
+        `${name}.${factLine}\n\nDEMO MODE: this is placeholder text, not AI output. ` +
+        `Add ANTHROPIC_API_KEY to your .env file to generate real copy.`,
+      persuasion: 65,
+      clarity: 80,
     },
     indepth: {
-      title: `${productName} — The Details That Matter`,
+      title: `${name} — full description`,
       description:
-        `Meet the ${productName}. Every detail is considered, from the materials to the finish, so it performs the way your customers expect and looks great doing it.\n\n` +
-        `Built to last and easy to love, it slots into daily life without fuss.\n\n` +
-        `Refillable, dependable, and backed by support that actually answers — this is the ${productName} done right.`,
-      scores: { seo: 90, readability: 76, persuasion: 84, clarity: 83 },
+        `${name}.${factLine}\n\nThe live version writes three genuinely different ` +
+        `drafts here, each grounded only in the facts you supply.\n\n` +
+        `DEMO MODE: placeholder text. Add your API key to see real output.`,
+      persuasion: 66,
+      clarity: 79,
     },
   };
-  const v = map[id];
-  return {
-    id,
-    title: v.title,
-    description:
-      v.description +
-      `\n\n(DEMO output — set ANTHROPIC_API_KEY for real ${tone} copy with AI.)`,
-    bullets: [
-      "Premium quality that stands out",
-      "Simple, reliable, everyday use",
-      "Backed by fast, friendly support",
-    ],
-    metaDescription: `Shop the ${productName}. Quality you can trust, delivered fast. Order yours today.`,
-    scores: v.scores,
-  };
+
+  const variants = VARIANTS.map((v) => {
+    const d = drafts[v.id];
+    return scoreVariant(
+      {
+        id: v.id,
+        title: d.title,
+        description: d.description,
+        bullets: facts
+          ? facts.split(/[,\n]+/).map((f) => f.trim()).filter(Boolean).slice(0, 5)
+          : ["Add product details to see selling points here"],
+        metaDescription: `${name}. ${facts}`.slice(0, 155),
+        scores: { persuasion: d.persuasion, clarity: d.clarity },
+      },
+      input
+    );
+  });
+
+  return { _demo: true, variants };
 }
 
-function demoResponse({ productName, tone }) {
-  return {
-    _demo: true,
-    variants: VARIANTS.map((v) => demoVariant(v.id, productName, tone)),
-  };
-}
+/* ── Routes ──────────────────────────────────────────────────────────── */
 
 app.post("/api/generate", async (req, res) => {
-  const { productName } = req.body || {};
+  const input = req.body || {};
 
-  if (!productName || !productName.trim()) {
-    return res.status(400).json({ error: "productName is required" });
+  if (!input.productName || !input.productName.trim()) {
+    return res.status(400).json({ error: "Enter a product name to generate copy." });
   }
 
   if (!hasApiKey) {
-    return res.json(demoResponse(req.body));
+    return res.json(demoResponse(input));
   }
 
   try {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 2600,
-      output_config: { effort: "low" },
+      output_config: { effort: "medium" },
       system:
-        "You are an expert e-commerce copywriter who writes high-converting, " +
-        "SEO-friendly product descriptions. You always return valid JSON.",
-      messages: [{ role: "user", content: buildPrompt(req.body) }],
+        "You are a working e-commerce copywriter. You write specific, grounded " +
+        "product copy that never sounds machine-generated, and you never invent " +
+        "facts about a product. You always return valid JSON and nothing else.",
+      messages: [{ role: "user", content: buildPrompt(input) }],
     });
 
     const text = response.content
@@ -165,23 +246,19 @@ app.post("/api/generate", async (req, res) => {
 
     let parsed;
     try {
-      const jsonSlice = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
-      parsed = JSON.parse(jsonSlice);
-    } catch (e) {
-      return res.status(502).json({
-        error: "Model did not return valid JSON",
-        raw: text,
-      });
+      parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+    } catch {
+      return res.status(502).json({ error: "The model returned something we couldn't read. Try again." });
     }
 
-    if (!parsed.variants || !Array.isArray(parsed.variants)) {
-      return res.status(502).json({ error: "Unexpected response shape", raw: text });
+    if (!Array.isArray(parsed.variants) || parsed.variants.length === 0) {
+      return res.status(502).json({ error: "The model returned an unexpected shape. Try again." });
     }
 
-    return res.json(parsed);
+    return res.json({ variants: parsed.variants.map((v) => scoreVariant(v, input)) });
   } catch (err) {
     console.error("Generation failed:", err);
-    return res.status(500).json({ error: "Generation failed. Check server logs." });
+    return res.status(500).json({ error: "Generation failed. Check the server logs." });
   }
 });
 
