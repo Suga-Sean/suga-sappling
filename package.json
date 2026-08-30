@@ -1,7 +1,7 @@
 {
-  "name": "ai-product-description-generator",
+  "name": "cartwright",
   "version": "0.1.0",
-  "description": "Generate SEO-friendly e-commerce product descriptions with AI. The sellable core of a Shopify/WooCommerce app.",
+  "description": "Cartwright — AI-crafted product copy for online stores. Three versions per product, each scored.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
